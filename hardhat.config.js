@@ -2,23 +2,37 @@ import "@0xweb/hardhat";
 
 const config = {
   solidity: {
-      version: "0.8.28",
-      settings: {
+    compilers: [
+      {
+        version: "0.8.28",
+        settings: {
           optimizer: {
-              enabled: true,
-              runs: 200
+            enabled: true,
+            runs: 200,
           },
-          viaIR: true
-      }
+          viaIR: true,
+        },
+      },
+      {
+        version: "0.8.26",
+        settings: {
+          optimizer: {
+            enabled: false,
+            runs: 200,
+          },
+          viaIR: true,
+        },
+      },
+    ],
   },
   networks: {
     hardhat: {
-        chainId: 1337,
-        allowUnlimitedContractSize: true,
+      chainId: 1337,
+      allowUnlimitedContractSize: true,
     },
     localhost: {
-        chainId: 1337
-    }
+      chainId: 1337,
+    },
   },
   etherscan: {
     apiKey: {
@@ -31,20 +45,19 @@ const config = {
         chainId: 560048,
         urls: {
           apiURL: "https://api-hoodi.etherscan.io/api",
-          browserURL: "https://hoodi.etherscan.io"
-        }
+          browserURL: "https://hoodi.etherscan.io",
+        },
       },
       {
         network: "eth",
         chainId: 1,
         urls: {
           apiURL: "https://api.etherscan.io/api",
-          browserURL: "https://etherscan.io"
-        }
-      }
-    ]
-  }
-
+          browserURL: "https://etherscan.io",
+        },
+      },
+    ],
+  },
 };
 
 export default config;
