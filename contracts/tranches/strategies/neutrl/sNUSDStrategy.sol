@@ -70,9 +70,34 @@ contract sNUSDStrategy is Strategy {
         address sender,
         address receiver
     ) external onlyCDO returns (uint256) {
+        return withdrawInner(tranche, token, tokenAmount, baseAssets, sender, receiver, false);
+    }
+
+    function withdraw(
+        address tranche,
+        address token,
+        uint256 tokenAmount,
+        uint256 baseAssets,
+        address sender,
+        address receiver,
+        bool shouldSkipCooldown
+    ) external onlyCDO returns (uint256) {
+        return withdrawInner(tranche, token, tokenAmount, baseAssets, sender, receiver, shouldSkipCooldown);
+    }
+
+    function withdrawInner(
+        address tranche,
+        address token,
+        uint256 tokenAmount,
+        uint256 baseAssets,
+        address sender,
+        address receiver,
+        bool shouldSkipCooldown
+    ) internal returns (uint256) {
         uint256 shares = sNUSD.previewWithdraw(baseAssets);
         if (token == address(sNUSD)) {
-            uint256 cooldownSeconds = cdo.isJrt(tranche) ? sNUSDCooldownJrt : sNUSDCooldownSrt;
+            uint256 cooldownSeconds =
+                shouldSkipCooldown ? 0 : (cdo.isJrt(tranche) ? sNUSDCooldownJrt : sNUSDCooldownSrt);
             erc20Cooldown.transfer(sNUSD, sender, receiver, shares, cooldownSeconds);
             return shares;
         }

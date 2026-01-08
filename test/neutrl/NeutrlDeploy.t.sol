@@ -58,7 +58,7 @@ contract NeutrlDeploy is Test {
     AprPairFeed internal feed;
     Accounting internal accounting;
 
-    function setUp() public {
+    function setUp() public virtual {
         string memory rpcUrl = vm.envString("MAINNET_RPC_URL");
 
         uint256 forkId = vm.createFork(rpcUrl, MAINNET_BLOCK);
