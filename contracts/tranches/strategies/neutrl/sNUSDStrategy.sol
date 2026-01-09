@@ -88,7 +88,7 @@ contract sNUSDStrategy is Strategy {
     function withdrawInner(
         address tranche,
         address token,
-        uint256 tokenAmount,
+        uint256,
         uint256 baseAssets,
         address sender,
         address receiver,
