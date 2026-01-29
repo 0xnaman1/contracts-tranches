@@ -13,6 +13,7 @@ import {SharesCooldown} from "../../contracts/tranches/base/cooldown/SharesCoold
 import {CooldownBase} from "../../contracts/tranches/base/cooldown/CooldownBase.sol";
 import {IStrataCDO} from "../../contracts/tranches/interfaces/IStrataCDO.sol";
 import {ITranche} from "../../contracts/tranches/interfaces/ITranche.sol";
+import {ISharesCooldown} from "../../contracts/tranches/interfaces/cooldown/ISharesCooldown.sol";
 
 /**
  * @title SIP2Test - Shares Cooldown Exit Mode Tests
@@ -326,7 +327,7 @@ contract SIP2Test is NeutrlDeploy {
 
         // 6. Cancel the redemption request
         vm.prank(alice);
-        sharesCooldown.cancel(IERC20(address(jrtVault)), alice, 0);
+        sharesCooldown.cancel(IERC20(address(jrtVault)), alice, 0, ISharesCooldown.TCancelGuard({shares: 0}));
 
         // 7. Verify Alice receives back SHARES
         uint256 aliceSharesAfterCancel = jrtVault.balanceOf(alice);
@@ -363,8 +364,8 @@ contract SIP2Test is NeutrlDeploy {
 
         // Bob tries to cancel Alice's request
         vm.prank(bob);
-        vm.expectRevert("OnlyOwner");
-        sharesCooldown.cancel(IERC20(address(jrtVault)), alice, 0);
+        vm.expectRevert("OnlySharesOwner");
+        sharesCooldown.cancel(IERC20(address(jrtVault)), alice, 0, ISharesCooldown.TCancelGuard({shares: 0}));
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -397,7 +398,7 @@ contract SIP2Test is NeutrlDeploy {
         uint256 nusdBefore = IERC20(NUSD).balanceOf(alice);
 
         // finalizeWithFee returns the number of shares claimed (after early exit fee deducted)
-        uint256 claimedShares = sharesCooldown.finalizeWithFee(jrtVault, alice, 0);
+        uint256 claimedShares = sharesCooldown.finalizeWithFee(jrtVault, NUSD, alice, 0, ISharesCooldown.TFinalizeWithFeeGuard({shares: uint192(pendingShares), daysLeft: 0}));
 
         uint256 nusdAfter = IERC20(NUSD).balanceOf(alice);
         assertEq(nusdAfter, nusdBefore + claimedShares, "Should receive NUSD tokens");
@@ -442,7 +443,7 @@ contract SIP2Test is NeutrlDeploy {
         // Try to call finalizeWithFee after cooldown - should revert
         vm.prank(alice);
         vm.expectRevert("RequestReady");
-        sharesCooldown.finalizeWithFee(jrtVault, alice, 0);
+        sharesCooldown.finalizeWithFee(jrtVault, NUSD, alice, 0, ISharesCooldown.TFinalizeWithFeeGuard({shares: 0, daysLeft: 0}));
     }
 
     /*//////////////////////////////////////////////////////////////
