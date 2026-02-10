@@ -7,51 +7,97 @@ import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IErrors} from "../../interfaces/IErrors.sol";
 import {IStrataCDO} from "../../interfaces/IStrataCDO.sol";
-import {IUnstakeCooldown} from "../../interfaces/cooldown/ICooldown.sol";
+import {IERC20Cooldown, IUnstakeCooldown} from "../../interfaces/cooldown/ICooldown.sol";
 import {Strategy} from "../../Strategy.sol";
 
 contract sUSCCStrategy is Strategy {
     IERC4626 public immutable ezUSCC1;
     IERC20 public immutable USDC;
 
-    // IERC20Cooldown public erc20Cooldown;
+    IERC20Cooldown public erc20Cooldown;
     IUnstakeCooldown public unstakeCooldown;
 
-    uint256 public sUSCCCooldownJrt;
-    uint256 public sUSCCCooldownSrt;
+    // uint256 public sUSCCCooldownJrt;
+    // uint256 public sUSCCCooldownSrt;
+
+    /// @notice Vesting period duration (24 hours)
+    uint256 public constant VESTING_PERIOD = 24 hours;
+
+    /// @notice Timestamp when the current vesting period started
+    uint256 public lastVestingTimestamp;
+
+    /// @notice Amount being vested in the current period
+    uint256 public vestingAmount;
+
+    /// @notice Raw total assets at the last vesting checkpoint
+    uint256 public lastTotalAssets;
+
+    event CooldownsChanged(uint256 jrt, uint256 srt);
+    event VestingUpdated(uint256 vestingAmount, uint256 lastTotalAssets, uint256 timestamp);
 
     constructor(IERC4626 ezUSCC1_, IERC20 USDC_) {
         ezUSCC1 = ezUSCC1_;
         USDC = USDC_;
     }
 
-    function initialize(address owner_, address acm_, IStrataCDO cdo_, IUnstakeCooldown unstakeCooldown_)
-        public
-        virtual
-        initializer
-    {
+    function initialize(
+        address owner_,
+        address acm_,
+        IStrataCDO cdo_,
+        IERC20Cooldown erc20Cooldown_,
+        IUnstakeCooldown unstakeCooldown_
+    ) public virtual initializer {
         AccessControlled_init(owner_, acm_);
 
         cdo = cdo_;
+        erc20Cooldown = erc20Cooldown_;
         unstakeCooldown = unstakeCooldown_;
 
         SafeERC20.forceApprove(ezUSCC1, address(unstakeCooldown), type(uint256).max);
+
+        // Only USDC withdrawals are enabled; ezUSCC is not offered to users
+        erc20Cooldown.setCooldownDisabled(ezUSCC1, true);
     }
 
-    function deposit(address, address token, uint256 tokenAmount, uint256 baseAssets, address owner)
+    /**
+     * @notice Processes asset deposits for the CDO contract.
+     * @dev This method is called by the CDO contract to handle asset deposits.
+     *      The only accepted token is USDC and it will be staked to receive ezUSCC shares.
+     * @param token The address of the token being deposited
+     * @param tokenAmount The amount of tokens being deposited
+     * @param baseAssets The amount of base assets represented by the deposit
+     * @param owner The address of the asset owner from whom to transfer tokens
+     * @return The amount of base assets received after deposit
+     */
+    function deposit(
+        address,
+        /* tranche */
+        address token,
+        uint256 tokenAmount,
+        uint256 baseAssets,
+        address owner
+    )
         external
+        onlyCDO
         returns (uint256)
     {
+        if (token != address(USDC)) {
+            revert UnsupportedToken(token);
+        }
+
+        _updateVesting();
+
         SafeERC20.safeTransferFrom(IERC20(token), owner, address(this), tokenAmount);
 
-        if (token == address(USDC)) {
-            SafeERC20.forceApprove(USDC, address(ezUSCC1), tokenAmount);
-            ezUSCC1.deposit(tokenAmount, address(this));
-            return tokenAmount;
-        }
-        revert UnsupportedToken(token);
+        SafeERC20.forceApprove(USDC, address(ezUSCC1), tokenAmount);
+        ezUSCC1.deposit(tokenAmount, address(this));
+        return tokenAmount;
     }
 
+    /**
+     * @notice Processes asset withdrawals for the CDO contract.
+     * @dev This method is called by the CDO contract to handle asset withdrawals.
+     */
     function withdraw(
         address tranche,
         address token,
@@ -59,7 +105,7 @@ contract sUSCCStrategy is Strategy {
         uint256 baseAssets,
         address sender,
         address receiver
-    ) external returns (uint256) {
+    ) external onlyCDO returns (uint256) {
         return withdrawInner(tranche, token, tokenAmount, baseAssets, sender, receiver, false);
     }
 
@@ -71,33 +117,198 @@ contract sUSCCStrategy is Strategy {
         address sender,
         address receiver,
         bool shouldSkipCooldown
-    ) external returns (uint256) {
+    ) external onlyCDO returns (uint256) {
         return withdrawInner(tranche, token, tokenAmount, baseAssets, sender, receiver, shouldSkipCooldown);
     }
 
     function withdrawInner(
-        address tranche,
+        address,
         address token,
-        uint256 tokenAmount,
+        uint256,
+        /* tokenAmount */
         uint256 baseAssets,
         address sender,
         address receiver,
-        bool shouldSkipCooldown
-    ) internal returns (uint256) {}
+        bool
+    ) internal returns (uint256) {
 
-    function totalAssets() external view returns (uint256) {}
-    function reduceReserve(address token, uint256 tokenAmount, address receiver) external {}
+        if (token != address(USDC)) {
+            revert UnsupportedToken(token);
+        }
 
-    function convertToAssets(address token, uint256 tokenAmount, Math.Rounding rounding)
+
+        _updateVesting();
+
+        uint256 shares = ezUSCC1.previewWithdraw(baseAssets);
+        unstakeCooldown.transfer(ezUSCC1, sender, receiver, shares);
+        return baseAssets;
+    }
+
+    /**
+     * @notice Allows the CDO to withdraw tokens from the strategy's reserve
+     * @param token The address of the token to be withdrawn (USDC only)
+     * @param tokenAmount The amount of tokens to be withdrawn
+     * @param receiver The address that will receive the withdrawn tokens
+     */
+    function reduceReserve(address token, uint256 tokenAmount, address receiver) external onlyCDO {
+        if (token != address(USDC)) {
+            revert UnsupportedToken(token);
+        }
+        // tokenAmount is in USDC, convert to ezUSCC shares and trigger unstaking
+        uint256 shares = ezUSCC1.convertToShares(tokenAmount);
+        if (shares == 0) {
+            revert ZeroAmount();
+        }
+        unstakeCooldown.transfer(ezUSCC1, receiver, receiver, shares);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            VESTING LOGIC
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Returns the raw total assets from the underlying vault
+     * @dev This is the actual value without vesting adjustments
+     */
+    function _getRawTotalAssets() internal view returns (uint256) {
+        uint256 shares = ezUSCC1.balanceOf(address(this));
+        return ezUSCC1.previewRedeem(shares);
+    }
+
+    /**
+     * @notice Returns the amount of assets that are still unvested
+     * @dev Calculates based on time elapsed since last vesting timestamp
+     */
+    function getUnvestedAmount() public view returns (uint256) {
+        if (lastVestingTimestamp == 0) {
+            return 0;
+        }
+        uint256 timeSinceLastVesting = block.timestamp - lastVestingTimestamp;
+        if (timeSinceLastVesting >= VESTING_PERIOD) {
+            return 0;
+        }
+        uint256 deltaT;
+        unchecked {
+            deltaT = VESTING_PERIOD - timeSinceLastVesting;
+        }
+        return (deltaT * vestingAmount) / VESTING_PERIOD;
+    }
+
+    /**
+     * @notice Updates the vesting state
+     * @dev Called on every deposit/withdraw to ensure vesting is up to date
+     *      - First call: initializes vesting without any vesting amount
+     *      - During vesting period: no update
+     *      - After vesting period: calculates new gain and starts new vesting
+     */
+    function _updateVesting() internal {
+        uint256 rawAssets = _getRawTotalAssets();
+
+        if (lastVestingTimestamp == 0) {
+            // First deposit - initialize without vesting
+            lastVestingTimestamp = block.timestamp;
+            lastTotalAssets = rawAssets;
+            vestingAmount = 0;
+            emit VestingUpdated(0, rawAssets, block.timestamp);
+            return;
+        }
+
+        uint256 timeSinceLastVesting = block.timestamp - lastVestingTimestamp;
+        if (timeSinceLastVesting < VESTING_PERIOD) {
+            // Still in current vesting window - no update needed
+            return;
+        }
+
+        // Vesting period has elapsed, calculate new gain
+        // Gain = rawAssets - lastTotalAssets (the increase due to exchange rate change)
+        uint256 gain = rawAssets > lastTotalAssets ? rawAssets - lastTotalAssets : 0;
+
+        // Start new vesting period
+        vestingAmount = gain;
+        lastVestingTimestamp = block.timestamp;
+        lastTotalAssets = rawAssets;
+
+        emit VestingUpdated(gain, rawAssets, block.timestamp);
+    }
+
+    /**
+     * @notice Calculates the total assets managed by this strategy (vested only)
+     * @dev Returns raw assets minus unvested amount
+     * @return baseAssets The total amount of vested USDC managed by this strategy
+     */
+    function totalAssets() external view returns (uint256 baseAssets) {
+        uint256 rawAssets = _getRawTotalAssets();
+        uint256 unvested = getUnvestedAmount();
+        return rawAssets > unvested ? rawAssets - unvested : 0;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            CONVERSION METHODS
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Converts a given amount of supported tokens to their equivalent in USDC
+     * @param token The address of the token to convert (USDC only)
+     * @param tokenAmount The amount of tokens to convert
+     * @return The equivalent amount in USDC
+     */
+    function convertToAssets(address token, uint256 tokenAmount, Math.Rounding)
         external
         view
-        returns (uint256 baseAssets)
-    {}
-    function convertToTokens(address token, uint256 baseAssets, Math.Rounding rounding)
+        returns (uint256)
+    {
+        if (token != address(USDC)) {
+            revert UnsupportedToken(token);
+        }
+        return tokenAmount;
+    }
+
+    /**
+     * @notice Converts a given amount of base assets (USDC) to the equivalent amount of supported tokens
+     * @param token The address of the token to convert to (USDC only)
+     * @param baseAssets The amount of base assets (USDC) to convert
+     * @return The equivalent amount in the requested token
+     */
+    function convertToTokens(address token, uint256 baseAssets, Math.Rounding)
         external
         view
-        returns (uint256 tokenAmount)
-    {}
+        returns (uint256)
+    {
+        if (token != address(USDC)) {
+            revert UnsupportedToken(token);
+        }
+        return baseAssets;
+    }
 
-    function getSupportedTokens() external view returns (IERC20[] memory) {}
+    /**
+     * @notice Returns an array of supported tokens: USDC only (deposits and withdrawals are in USDC)
+     */
+    function getSupportedTokens() external view returns (IERC20[] memory) {
+        IERC20[] memory tokens = new IERC20[](1);
+        tokens[0] = USDC;
+        return tokens;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            CONFIGURATION
+    //////////////////////////////////////////////////////////////*/
+
+    /**
+     * @notice Updates the cooldown periods for ezUSCC withdrawals
+     */
+    // function setCooldowns(uint256 sUSCCCooldownJrt_, uint256 sUSCCCooldownSrt_)
+    //     external
+    //     onlyRole(UPDATER_STRAT_CONFIG_ROLE)
+    // {
+    //     uint256 WEEK = 7 days;
+    //     if (sUSCCCooldownJrt_ > WEEK || sUSCCCooldownSrt_ > WEEK) {
+    //         revert InvalidConfigCooldown();
+    //     }
+    //     sUSCCCooldownJrt = sUSCCCooldownJrt_;
+    //     sUSCCCooldownSrt = sUSCCCooldownSrt_;
+
+    //     bool isDisabled = sUSCCCooldownJrt_ == 0 && sUSCCCooldownSrt_ == 0;
+    //     erc20Cooldown.setCooldownDisabled(ezUSCC1, isDisabled);
+    //     emit CooldownsChanged(sUSCCCooldownJrt_, sUSCCCooldownSrt_);
+    // }
 }

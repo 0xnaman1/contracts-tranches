@@ -19,9 +19,7 @@ contract LEZyVaultTest is Test {
     address public feeRecipient;
     address public depositor;
 
-    // Token addresses - user will provide USDC address
-    // Note: USCC is the vault's share token (ERC4626), so the vault contract address itself represents USCC
-    address public constant USDC = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48); // TODO: Replace with actual USDC address on mainnet
+    address public constant USDC = address(0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48);
 
     // Mainnet addresses
     address public constant WETH = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
@@ -100,9 +98,9 @@ contract LEZyVaultTest is Test {
         uint256 initialUSCCBalance = IERC20(address(lezyVault)).balanceOf(depositor);
         uint256 initialVaultUSDCBalance = IERC20(USDC).balanceOf(address(lezyVault));
 
-        console2.log("Initial USDC balance:", initialUSDCBalance);
-        console2.log("Initial USCC balance:", initialUSCCBalance);
-        console2.log("Initial Vault USDC balance:", initialVaultUSDCBalance);
+        console2.log("Initial USDC balance{depositor}:", initialUSDCBalance);
+        console2.log("Initial USCC balance{depositor}:", initialUSCCBalance);
+        console2.log("Initial Vault USDC balance{vault}:", initialVaultUSDCBalance);
 
         uint256 sharesMinted = _deposit_helper(depositor, depositAmount);
 
@@ -111,9 +109,9 @@ contract LEZyVaultTest is Test {
         uint256 finalUSCCBalance = IERC20(address(lezyVault)).balanceOf(depositor);
         uint256 finalVaultUSDCBalance = IERC20(USDC).balanceOf(address(lezyVault));
 
-        console2.log("Final USDC balance:", finalUSDCBalance);
-        console2.log("Final USCC balance:", finalUSCCBalance);
-        console2.log("Final Vault USDC balance:", finalVaultUSDCBalance);
+        console2.log("Final USDC balance{depositor}:", finalUSDCBalance);
+        console2.log("Final USCC balance{depositor}:", finalUSCCBalance);
+        console2.log("Final Vault USDC balance{vault}:", finalVaultUSDCBalance);
         console2.log("Shares minted:", sharesMinted);
 
         // Assertions
@@ -229,13 +227,13 @@ contract LEZyVaultTest is Test {
         uint256 usccBalanceBeforeWithdraw = IERC20(address(lezyVault)).balanceOf(depositor);
         uint256 usdcBalanceBeforeWithdraw = IERC20(USDC).balanceOf(depositor);
 
-        console2.log("USCC balance before withdraw:", usccBalanceBeforeWithdraw);
-        console2.log("USDC balance before withdraw:", usdcBalanceBeforeWithdraw);
+        console2.log("USCC balance before withdraw{depositor}:", usccBalanceBeforeWithdraw);
+        console2.log("USDC balance before withdraw{depositor}:", usdcBalanceBeforeWithdraw);
 
         // Step 1: Approve USCC (LP tokens) to the WithdrawQueue contract and call withdraw
         vm.startPrank(depositor);
         IERC20(address(lezyVault)).approve(address(withdrawQueue), sharesMinted);
-        
+
         // Call withdraw on the WithdrawQueue - this creates a withdraw request
         withdrawQueue.withdraw(sharesMinted);
         vm.stopPrank();
@@ -243,10 +241,10 @@ contract LEZyVaultTest is Test {
         // Verify shares were transferred to withdraw queue
         uint256 usccBalanceAfterWithdrawRequest = IERC20(address(lezyVault)).balanceOf(depositor);
         uint256 withdrawQueueUsccBalance = IERC20(address(lezyVault)).balanceOf(address(withdrawQueue));
-        
-        console2.log("USCC balance after withdraw request:", usccBalanceAfterWithdrawRequest);
-        console2.log("WithdrawQueue USCC balance:", withdrawQueueUsccBalance);
-        
+
+        console2.log("USCC balance after withdraw request{depositor}:", usccBalanceAfterWithdrawRequest);
+        console2.log("WithdrawQueue USCC balance{withdrawQueue}:", withdrawQueueUsccBalance);
+
         assertEq(usccBalanceAfterWithdrawRequest, 0, "All USCC should be transferred to withdraw queue");
         assertEq(withdrawQueueUsccBalance, sharesMinted, "Withdraw queue should hold the shares");
 
@@ -276,7 +274,11 @@ contract LEZyVaultTest is Test {
         // Verify USDC was transferred to withdraw queue
         uint256 usdcBalanceOfWithdrawQueue = IERC20(USDC).balanceOf(address(withdrawQueue));
         console2.log("USDC balance of withdraw queue after manage:", usdcBalanceOfWithdrawQueue);
-        assertEq(usdcBalanceOfWithdrawQueue, depositAmount, "USDC balance of withdraw queue should be equal to deposit amount");
+        assertEq(
+            usdcBalanceOfWithdrawQueue,
+            depositAmount,
+            "USDC balance of withdraw queue should be equal to deposit amount"
+        );
 
         // Step 3: Wait for cooldown period to pass (7 days as configured in setUp)
         vm.warp(block.timestamp + 7 days + 1);
