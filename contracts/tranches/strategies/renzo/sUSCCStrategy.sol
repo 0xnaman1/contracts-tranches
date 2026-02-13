@@ -17,9 +17,6 @@ contract sUSCCStrategy is Strategy {
     IERC20Cooldown public erc20Cooldown;
     IUnstakeCooldown public unstakeCooldown;
 
-    // uint256 public sUSCCCooldownJrt;
-    // uint256 public sUSCCCooldownSrt;
-
     /// @notice Vesting period duration (24 hours)
     uint256 public constant VESTING_PERIOD = 24 hours;
 
@@ -32,7 +29,7 @@ contract sUSCCStrategy is Strategy {
     /// @notice Raw total assets at the last vesting checkpoint
     uint256 public lastTotalAssets;
 
-    event CooldownsChanged(uint256 jrt, uint256 srt);
+
     event VestingUpdated(uint256 vestingAmount, uint256 lastTotalAssets, uint256 timestamp);
 
     constructor(IERC4626 ezUSCC1_, IERC20 USDC_) {
@@ -54,9 +51,6 @@ contract sUSCCStrategy is Strategy {
         unstakeCooldown = unstakeCooldown_;
 
         SafeERC20.forceApprove(ezUSCC1, address(unstakeCooldown), type(uint256).max);
-
-        // Only USDC withdrawals are enabled; ezUSCC is not offered to users
-        erc20Cooldown.setCooldownDisabled(ezUSCC1, true);
     }
 
     /**
@@ -91,6 +85,11 @@ contract sUSCCStrategy is Strategy {
 
         SafeERC20.forceApprove(USDC, address(ezUSCC1), tokenAmount);
         ezUSCC1.deposit(tokenAmount, address(this));
+
+        // Update lastTotalAssets to include the new deposit so it is not
+        // counted as yield gain in the next vesting period.
+        lastTotalAssets = _getRawTotalAssets();
+
         return tokenAmount;
     }
 
@@ -139,8 +138,13 @@ contract sUSCCStrategy is Strategy {
 
         _updateVesting();
 
-        uint256 shares = ezUSCC1.previewWithdraw(baseAssets);
+        uint256 shares = ezUSCC1.convertToShares(baseAssets);
         unstakeCooldown.transfer(ezUSCC1, sender, receiver, shares);
+
+        // Update lastTotalAssets to reflect the withdrawal so it is not
+        // counted as negative gain in the next vesting period.
+        lastTotalAssets = _getRawTotalAssets();
+
         return baseAssets;
     }
 
@@ -288,27 +292,4 @@ contract sUSCCStrategy is Strategy {
         tokens[0] = USDC;
         return tokens;
     }
-
-    /*//////////////////////////////////////////////////////////////
-                            CONFIGURATION
-    //////////////////////////////////////////////////////////////*/
-
-    /**
-     * @notice Updates the cooldown periods for ezUSCC withdrawals
-     */
-    // function setCooldowns(uint256 sUSCCCooldownJrt_, uint256 sUSCCCooldownSrt_)
-    //     external
-    //     onlyRole(UPDATER_STRAT_CONFIG_ROLE)
-    // {
-    //     uint256 WEEK = 7 days;
-    //     if (sUSCCCooldownJrt_ > WEEK || sUSCCCooldownSrt_ > WEEK) {
-    //         revert InvalidConfigCooldown();
-    //     }
-    //     sUSCCCooldownJrt = sUSCCCooldownJrt_;
-    //     sUSCCCooldownSrt = sUSCCCooldownSrt_;
-
-    //     bool isDisabled = sUSCCCooldownJrt_ == 0 && sUSCCCooldownSrt_ == 0;
-    //     erc20Cooldown.setCooldownDisabled(ezUSCC1, isDisabled);
-    //     emit CooldownsChanged(sUSCCCooldownJrt_, sUSCCCooldownSrt_);
-    // }
 }
