@@ -237,13 +237,14 @@ contract sUSCCStrategy is Strategy {
 
     /**
      * @notice Calculates the total assets managed by this strategy (vested only)
-     * @dev Returns raw assets minus unvested amount
+     * @dev Anchors on lastTotalAssets (the snapshot at the last vesting checkpoint) and
+     *      adds only the portion of vestingAmount that has elapsed so far. This prevents
+     *      gains that accrued in the underlying protocol since the last _updateVesting call
+     *      from leaking into the reported value before they should be recognized.
      * @return baseAssets The total amount of vested USDC managed by this strategy
      */
     function totalAssets() external view returns (uint256 baseAssets) {
-        uint256 rawAssets = _getRawTotalAssets();
-        uint256 unvested = getUnvestedAmount();
-        return rawAssets > unvested ? rawAssets - unvested : 0;
+        return lastTotalAssets + vestingAmount - getUnvestedAmount();
     }
 
     /*//////////////////////////////////////////////////////////////

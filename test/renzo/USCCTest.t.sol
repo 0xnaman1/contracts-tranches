@@ -287,6 +287,11 @@ contract USCCTest is USCCDeploy {
         assertGt(claimed, 0, "Should claim all pending tokens");
         uint256 usdcAfter = IERC20(USDC).balanceOf(alice);
         assertEq(usdcAfter - usdcBefore, claimed, "Should receive claimed USDC");
+
+        (uint256 pending, uint256 claimable,,,uint tR) = _getUnstakeCooldownBalance(alice);
+        assertEq(pending, 0, "Should have no pending amount");
+        assertEq(claimable, 0, "Should have no claimable amount");
+        assertEq(tR, 0, "Should have no total requests");
     }
 
     /*//////////////////////////////////////////////////////////////

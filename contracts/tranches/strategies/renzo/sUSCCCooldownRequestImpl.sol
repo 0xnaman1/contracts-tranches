@@ -28,6 +28,7 @@ contract sUSCCCooldownRequestImpl is IUnstakeHandler, Initializable {
     uint256 public requestedAt;
     bool public pending;
 
+    uint256 public firstWithdrawRequestIndex;
     uint256 public withdrawRequestIndex;
 
     constructor(IERC4626 ezUSCC_) {
@@ -60,7 +61,10 @@ contract sUSCCCooldownRequestImpl is IUnstakeHandler, Initializable {
         // Create withdraw request in the WithdrawQueue
         withdrawQueue.withdraw(shares);
 
-        // Store the withdraw request index (0-indexed, so it's the count before)
+        // Track the index range: first index is set only on the first call of a lifecycle
+        if (!pending) {
+            firstWithdrawRequestIndex = requestCountBefore;
+        }
         withdrawRequestIndex = requestCountBefore;
         requestedAt = block.timestamp;
         receiver = receiver_;
@@ -81,17 +85,15 @@ contract sUSCCCooldownRequestImpl is IUnstakeHandler, Initializable {
 
         IWithdrawQueueMinimal withdrawQueue = _getWithdrawQueue();
 
-        // Get the expected amount from the withdraw request
-        (, uint256 amountToRedeem,,,) = withdrawQueue.withdrawRequests(address(this), withdrawRequestIndex);
+        // Claim all requests in descending order to preserve indices during swap-and-pop
+        for (uint256 i = withdrawRequestIndex; ; ) {
+            withdrawQueue.claim(i, address(this));
+            if (i == firstWithdrawRequestIndex) break;
+            unchecked { i--; }
+        }
 
-        // Claim from WithdrawQueue - this sends USDC to address(this)
-        withdrawQueue.claim(withdrawRequestIndex, address(this));
+        amount = USDC.balanceOf(address(this));
 
-        // Get actual USDC balance received
-        uint256 usdcBalance = USDC.balanceOf(address(this));
-        amount = usdcBalance > 0 ? usdcBalance : amountToRedeem;
-
-        // Transfer USDC to receiver
         if (amount > 0) {
             USDC.safeTransfer(receiver, amount);
         }
@@ -109,8 +111,11 @@ contract sUSCCCooldownRequestImpl is IUnstakeHandler, Initializable {
             return 0;
         }
         IWithdrawQueueMinimal withdrawQueue = _getWithdrawQueue();
-        (, uint256 amountToRedeem,,,) = withdrawQueue.withdrawRequests(address(this), withdrawRequestIndex);
-        return amountToRedeem;
+        for (uint256 i = firstWithdrawRequestIndex; i <= withdrawRequestIndex; ) {
+            (, uint256 amountToRedeem,,,) = withdrawQueue.withdrawRequests(address(this), i);
+            amount += amountToRedeem;
+            unchecked { i++; }
+        }
     }
 
     /**
